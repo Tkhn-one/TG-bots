@@ -5,7 +5,7 @@ installations can replace it with an approved API/integration when available.
 """
 import hashlib
 import re
-from urllib.parse import urljoin, urlparse
+from urllib.parse import parse_qs, urljoin, urlparse
 
 import httpx
 from bs4 import BeautifulSoup
@@ -44,25 +44,31 @@ async def fetch_listings(search_url: str) -> list[Listing]:
         raise AvitoError("Не удалось загрузить страницу поиска. Проверьте ссылку и интернет-соединение.") from exc
 
     soup = BeautifulSoup(response.text, "html.parser")
-    cards = soup.select('[data-marker="item"]')
-    # Older markup can omit the item wrapper, but preserves item-title.
-    if not cards:
-        cards = [node.parent for node in soup.select('[data-marker="item-title"]') if node.parent]
+    # Prefer the title anchor itself. On some Avito layouts an image/gallery link
+    # occurs before the title inside a card; selecting a generic item URL there
+    # can produce notifications such as "Ещё 10 фото" instead of a listing title.
+    title_links = soup.select('a[data-marker="item-title"]')
+    if not title_links:
+        # Compatibility fallback for an older layout without data-marker.
+        title_links = soup.select('a[itemprop="url"] h3, a[itemprop="url"]')
 
     listings: list[Listing] = []
     used: set[str] = set()
-    for card in cards:
-        link = card.select_one('a[data-marker="item-title"], a[itemprop="url"]')
+    for title_link in title_links:
+        link = title_link if title_link.name == "a" else title_link.find_parent("a", href=True)
         if not link or not link.get("href"):
             continue
         url = urljoin(BASE_URL, link["href"])
         title = link.get_text(" ", strip=True)
-        if not title:
+        if not title or _looks_like_gallery_label(title):
+            continue
+        if not _matches_query(title, search_url):
             continue
         external_id = _listing_id(url)
         if external_id in used:
             continue
         used.add(external_id)
+        card = _listing_container(link)
         price_node = card.select_one('[data-marker="item-price"], [itemprop="price"]')
         geo_node = card.select_one('[data-marker="item-address"], [data-marker="item-location"]')
         date_node = card.select_one('[data-marker="item-date"]')
@@ -77,6 +83,40 @@ async def fetch_listings(search_url: str) -> list[Listing]:
     if not listings and ("captcha" in response.text.lower() or "доступ ограничен" in response.text.lower()):
         raise AvitoError("Avito запросил проверку доступа. Бот не обходит CAPTCHA — попробуйте позже или используйте разрешённую интеграцию.")
     return listings
+
+
+def _listing_container(link):
+    """Return the closest card-like ancestor, falling back to the parent."""
+    node = link
+    for _ in range(8):
+        parent = node.parent
+        if parent is None:
+            break
+        node = parent
+        if node.get("data-marker") == "item" or node.select_one('[data-marker="item-price"], [itemprop="price"]'):
+            return node
+    return link.parent
+
+
+def _looks_like_gallery_label(value: str) -> bool:
+    return bool(re.fullmatch(r"(?:ещё|еще)\s+\d+\s+фото", value.strip(), flags=re.IGNORECASE))
+
+
+def _matches_query(title: str, search_url: str) -> bool:
+    """Apply an exact local guard for the textual query in an Avito URL.
+
+    Marketplace search can return related/recommended cards (for example, a
+    different all-terrain vehicle for a `Tinger TF4` query).  A card is useful
+    for this bot only when its title contains every meaningful query token.
+    Category, price and geographic filters remain handled by the saved URL.
+    """
+    raw_query = parse_qs(urlparse(search_url).query).get("q", [""])[0]
+    tokens = re.findall(r"[\wа-яё]+", raw_query.casefold(), flags=re.IGNORECASE)
+    tokens = [token for token in tokens if len(token) >= 2]
+    if not tokens:
+        return True
+    normalized_title = " ".join(re.findall(r"[\wа-яё]+", title.casefold(), flags=re.IGNORECASE))
+    return all(re.search(rf"(?<!\w){re.escape(token)}(?!\w)", normalized_title) for token in tokens)
 
 
 def _listing_id(url: str) -> str:
