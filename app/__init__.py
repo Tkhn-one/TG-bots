@@ -1,0 +1,1 @@
+"""Avito Watcher bot."""
