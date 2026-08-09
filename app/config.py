@@ -7,6 +7,8 @@ class Settings(BaseSettings):
     database_path: str = "data/avito_watcher.sqlite3"
     min_check_interval_minutes: int = 5
     log_level: str = "INFO"
+    # Optional HTTP/HTTPS proxy URL for access to Telegram Bot API.
+    telegram_proxy: str | None = None
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
