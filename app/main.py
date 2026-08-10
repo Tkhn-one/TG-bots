@@ -21,6 +21,7 @@ async def main() -> None:
     monitor = Monitor(db, bot)
     monitor_task = asyncio.create_task(monitor.run())
     dp = create_dispatcher(db, settings)
+    dp["monitor"] = monitor
     try:
         # A lost connection should not require manual restart of a deployed bot.
         while True:

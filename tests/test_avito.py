@@ -23,3 +23,12 @@ def test_container_is_scoped_to_title_card() -> None:
     soup = BeautifulSoup('''<div data-marker="item"><a data-marker="item-title" href="/x">Tinger TF4</a><span data-marker="item-price">220 000 ₽</span></div>''', "html.parser")
     link = soup.select_one('a[data-marker="item-title"]')
     assert _listing_container(link).get("data-marker") == "item"
+
+from app.avito import published_within
+
+
+def test_recent_publication_labels() -> None:
+    assert published_within("Сегодня в 12:00", 24 * 60)
+    assert published_within("30 минут назад", 31)
+    assert not published_within("30 минут назад", 29)
+    assert not published_within(None, 60)

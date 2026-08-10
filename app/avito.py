@@ -5,6 +5,8 @@ installations can replace it with an approved API/integration when available.
 """
 import hashlib
 import re
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from urllib.parse import parse_qs, urljoin, urlparse
 
 import httpx
@@ -118,6 +120,37 @@ def _matches_query(title: str, search_url: str) -> bool:
     normalized_title = " ".join(re.findall(r"[\wа-яё]+", title.casefold(), flags=re.IGNORECASE))
     return all(re.search(rf"(?<!\w){re.escape(token)}(?!\w)", normalized_title) for token in tokens)
 
+
+def published_within(value: str | None, window_minutes: int) -> bool:
+    """Interpret the Russian publication labels used in search result cards.
+
+    If Avito omits or changes a date label, return False rather than claiming an
+    item fits a period the bot cannot verify.
+    """
+    if not value:
+        return False
+    text = " ".join(value.casefold().split())
+    now = datetime.now(ZoneInfo("Europe/Moscow"))
+    if text.startswith("сегодня") or text.startswith("вчера"):
+        published = now - (timedelta(days=1) if text.startswith("вчера") else timedelta())
+        clock = re.search(r"(\d{1,2}):(\d{2})", text)
+        if clock:
+            published = published.replace(hour=int(clock.group(1)), minute=int(clock.group(2)), second=0, microsecond=0)
+    else:
+        relative = re.search(r"(\d+)\s+(минут[а-я]*|час[а-я]*)\s+назад", text)
+        if relative:
+            count, unit = int(relative.group(1)), relative.group(2)
+            published = now - timedelta(minutes=count if unit.startswith("мин") else count * 60)
+        else:
+            months = {"января": 1, "февраля": 2, "марта": 3, "апреля": 4, "мая": 5, "июня": 6,
+                      "июля": 7, "августа": 8, "сентября": 9, "октября": 10, "ноября": 11, "декабря": 12}
+            match = re.search(r"(\d{1,2})\s+([а-я]+)", text)
+            if not match or match.group(2) not in months:
+                return False
+            published = now.replace(month=months[match.group(2)], day=int(match.group(1)), hour=0, minute=0, second=0, microsecond=0)
+            if published > now:
+                published = published.replace(year=published.year - 1)
+    return now - published <= timedelta(minutes=window_minutes)
 
 def _listing_id(url: str) -> str:
     match = re.search(r"_(\d+)(?:\?|$)", url)

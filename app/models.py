@@ -11,6 +11,7 @@ class Watch:
     interval_minutes: int
     is_active: bool
     last_checked_at: datetime | None
+    initial_window_minutes: int | None = None
 
 
 @dataclass(frozen=True)

@@ -19,6 +19,8 @@ class NewWatch(StatesGroup):
     name = State()
     url = State()
     interval = State()
+    delivery = State()
+    custom_window = State()
 
 
 def main_keyboard() -> InlineKeyboardMarkup:
@@ -52,7 +54,8 @@ def watches_keyboard(watches) -> InlineKeyboardMarkup:
 def watch_text(watch) -> str:
     state = "🟢 активен" if watch.is_active else "⚪ приостановлен"
     checked = watch.last_checked_at.astimezone(UTC).strftime("%d.%m %H:%M UTC") if watch.last_checked_at else "ещё не проверялся"
-    return (f"<b>{html.escape(watch.name)}</b>\n\nСтатус: {state}\nИнтервал: каждые {watch.interval_minutes} мин.\nПоследняя проверка: {checked}\n\n"
+    initial = "только новые после первого сканирования" if watch.initial_window_minutes is None else f"сразу прислать за последние {watch.initial_window_minutes} мин."
+    return (f"<b>{html.escape(watch.name)}</b>\n\nСтатус: {state}\nИнтервал: каждые {watch.interval_minutes} мин.\nПервый запуск: {initial}\nПоследняя проверка: {checked}\n\n"
             f"<a href=\"{html.escape(watch.url, quote=True)}\">Открыть поиск на Avito</a>")
 
 
@@ -134,12 +137,50 @@ async def receive_interval(message: Message, state: FSMContext, db: Database, se
     except ValueError:
         await message.answer(f"Введите целое число от {settings.min_check_interval_minutes} до 1440.", reply_markup=cancel_keyboard())
         return
+    await state.update_data(interval=interval)
+    await state.set_state(NewWatch.delivery)
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Только новые", callback_data="delivery:new")],
+        [InlineKeyboardButton(text="За последний час", callback_data="delivery:60"), InlineKeyboardButton(text="За 24 часа", callback_data="delivery:1440")],
+        [InlineKeyboardButton(text="За 7 дней", callback_data="delivery:10080"), InlineKeyboardButton(text="Свой период", callback_data="delivery:custom")],
+        [InlineKeyboardButton(text="Отмена", callback_data="cancel")],
+    ])
+    await message.answer("<b>Первый запуск</b>\n\nЧто прислать сразу после создания поиска?\n\n«Только новые» — сохранить текущую выдачу как базу и уведомлять лишь о будущих объявлениях.\n«За период» — прислать <b>все</b> подходящие объявления, которые сейчас видны в выдаче и помечены Avito как опубликованные в выбранное время; после этого бот также перейдёт в режим новых.", reply_markup=keyboard, parse_mode="HTML")
+
+
+async def finish_watch_creation(message: Message, user_id: int, state: FSMContext, db: Database, monitor, initial_window_minutes: int | None) -> None:
     data = await state.get_data()
-    watch_id = db.create_watch(message.from_user.id, data["name"], data["url"], interval)
+    watch_id = db.create_watch(user_id, data["name"], data["url"], data["interval"], initial_window_minutes)
     await state.clear()
-    await message.answer("✅ Поиск сохранён. Сейчас бот выполнит первую проверку и запомнит найденные объявления — уведомлений по ним не будет. После этого будут приходить только новые объявления.", reply_markup=main_keyboard())
-    watch = db.get_watch(watch_id, message.from_user.id)
+    watch = db.get_watch(watch_id, user_id)
+    await message.answer("⏳ Поиск сохранён. Выполняю первую проверку сейчас — ждать выбранный интервал не нужно.", reply_markup=main_keyboard())
+    await monitor.check(watch)
+    watch = db.get_watch(watch_id, user_id)
     await message.answer(watch_text(watch), reply_markup=watch_keyboard(watch.id, watch.is_active), parse_mode="HTML", disable_web_page_preview=True)
+
+
+@router.callback_query(NewWatch.delivery, F.data.startswith("delivery:"))
+async def receive_delivery(callback: CallbackQuery, state: FSMContext, db: Database, monitor) -> None:
+    value = callback.data.split(":", 1)[1]
+    await callback.answer()
+    if value == "custom":
+        await state.set_state(NewWatch.custom_window)
+        await callback.message.edit_text("Введите период целым числом в минутах: от 1 до 43 200 (30 дней). Например, <b>180</b> — за последние 3 часа.", reply_markup=cancel_keyboard(), parse_mode="HTML")
+        return
+    await callback.message.edit_text("Настройка принята.")
+    await finish_watch_creation(callback.message, callback.from_user.id, state, db, monitor, None if value == "new" else int(value))
+
+
+@router.message(NewWatch.custom_window)
+async def receive_custom_window(message: Message, state: FSMContext, db: Database, monitor) -> None:
+    try:
+        minutes = int((message.text or "").strip())
+        if not 1 <= minutes <= 43200:
+            raise ValueError
+    except ValueError:
+        await message.answer("Введите целое число от 1 до 43 200 минут.", reply_markup=cancel_keyboard())
+        return
+    await finish_watch_creation(message, message.from_user.id, state, db, monitor, minutes)
 
 
 @router.callback_query(F.data == "cancel")

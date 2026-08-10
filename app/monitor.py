@@ -5,7 +5,7 @@ import logging
 from aiogram import Bot
 from aiogram.exceptions import TelegramForbiddenError
 
-from app.avito import AvitoError, fetch_listings
+from app.avito import AvitoError, fetch_listings, published_within
 from app.database import Database
 from app.models import Listing, Watch
 
@@ -48,11 +48,16 @@ class Monitor:
             self.db.remember_listings(watch.id, ids)
             self.db.mark_checked(watch.id)
             if initial:
-                log.info("Baseline saved for watch %s: %s listings", watch.id, len(ids))
-                return
-            for listing in listings:
-                if listing.external_id not in unseen:
-                    continue
+                if watch.initial_window_minutes is None:
+                    log.info("Baseline saved for watch %s: %s listings", watch.id, len(ids))
+                    return
+                # Send every currently visible matching card that Avito marks as
+                # published inside the user-selected period, then switch to new-only.
+                candidates = [item for item in listings if published_within(item.published_at, watch.initial_window_minutes)]
+                log.info("Initial history scan for watch %s: %s of %s listings", watch.id, len(candidates), len(listings))
+            else:
+                candidates = [item for item in listings if item.external_id in unseen]
+            for listing in candidates:
                 try:
                     await self.bot.send_message(watch.user_id, listing_message(watch, listing), parse_mode="HTML", disable_web_page_preview=True)
                 except TelegramForbiddenError:

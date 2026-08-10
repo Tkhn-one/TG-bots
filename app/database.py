@@ -32,7 +32,8 @@ class Database:
                     url TEXT NOT NULL,
                     interval_minutes INTEGER NOT NULL DEFAULT 10,
                     is_active INTEGER NOT NULL DEFAULT 1,
-                    last_checked_at TEXT
+                    last_checked_at TEXT,
+                    initial_window_minutes INTEGER
                 );
                 CREATE TABLE IF NOT EXISTS seen_listings (
                     watch_id INTEGER NOT NULL,
@@ -43,12 +44,15 @@ class Database:
                 );
                 CREATE INDEX IF NOT EXISTS idx_watches_active ON watches(is_active);
             """)
+            columns = {row["name"] for row in con.execute("PRAGMA table_info(watches)")}
+            if "initial_window_minutes" not in columns:
+                con.execute("ALTER TABLE watches ADD COLUMN initial_window_minutes INTEGER")
 
-    def create_watch(self, user_id: int, name: str, url: str, interval: int) -> int:
+    def create_watch(self, user_id: int, name: str, url: str, interval: int, initial_window_minutes: int | None = None) -> int:
         with self.connection() as con:
             cur = con.execute(
-                "INSERT INTO watches(user_id, name, url, interval_minutes) VALUES (?, ?, ?, ?)",
-                (user_id, name, url, interval),
+                "INSERT INTO watches(user_id, name, url, interval_minutes, initial_window_minutes) VALUES (?, ?, ?, ?, ?)",
+                (user_id, name, url, interval, initial_window_minutes),
             )
             return int(cur.lastrowid)
 
@@ -105,4 +109,4 @@ class Database:
     @staticmethod
     def _watch(row: sqlite3.Row) -> Watch:
         checked = datetime.fromisoformat(row["last_checked_at"]) if row["last_checked_at"] else None
-        return Watch(row["id"], row["user_id"], row["name"], row["url"], row["interval_minutes"], bool(row["is_active"]), checked)
+        return Watch(row["id"], row["user_id"], row["name"], row["url"], row["interval_minutes"], bool(row["is_active"]), checked, row["initial_window_minutes"])
