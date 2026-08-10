@@ -18,7 +18,7 @@ async def main() -> None:
     db.initialize()
     session = AiohttpSession(proxy=settings.telegram_proxy) if settings.telegram_proxy else AiohttpSession()
     bot = Bot(settings.bot_token, session=session)
-    monitor = Monitor(db, bot)
+    monitor = Monitor(db, bot, max_seen_per_watch=settings.max_seen_listings_per_watch, seen_retention_days=settings.seen_listing_retention_days)
     monitor_task = asyncio.create_task(monitor.run())
     dp = create_dispatcher(db, settings)
     dp["monitor"] = monitor

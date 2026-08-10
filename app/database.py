@@ -1,6 +1,6 @@
 import sqlite3
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Iterator
 
@@ -16,6 +16,7 @@ class Database:
     def connection(self) -> Iterator[sqlite3.Connection]:
         con = sqlite3.connect(self.path)
         con.row_factory = sqlite3.Row
+        con.execute("PRAGMA foreign_keys = ON")
         try:
             yield con
             con.commit()
@@ -43,10 +44,13 @@ class Database:
                     FOREIGN KEY (watch_id) REFERENCES watches(id) ON DELETE CASCADE
                 );
                 CREATE INDEX IF NOT EXISTS idx_watches_active ON watches(is_active);
+                CREATE INDEX IF NOT EXISTS idx_seen_watch_date ON seen_listings(watch_id, first_seen_at DESC);
             """)
             columns = {row["name"] for row in con.execute("PRAGMA table_info(watches)")}
             if "initial_window_minutes" not in columns:
                 con.execute("ALTER TABLE watches ADD COLUMN initial_window_minutes INTEGER")
+            # Databases created before foreign-key enforcement could have leftovers.
+            con.execute("DELETE FROM seen_listings WHERE watch_id NOT IN (SELECT id FROM watches)")
 
     def create_watch(self, user_id: int, name: str, url: str, interval: int, initial_window_minutes: int | None = None) -> int:
         with self.connection() as con:
@@ -105,6 +109,33 @@ class Database:
         now = datetime.now(UTC).isoformat()
         with self.connection() as con:
             con.executemany("INSERT OR IGNORE INTO seen_listings(watch_id, external_id, first_seen_at) VALUES (?, ?, ?)", [(watch_id, item, now) for item in listing_ids])
+
+    def prune_seen_listings(self, watch_id: int, max_count: int, retention_days: int) -> int:
+        """Bound deduplication storage for one search.
+
+        The newest entries are retained. If a very old listing is removed and
+        later returns to Avito's results, it can be notified once again.
+        """
+        cutoff = (datetime.now(UTC) - timedelta(days=retention_days)).isoformat()
+        with self.connection() as con:
+            removed_by_age = con.execute(
+                "DELETE FROM seen_listings WHERE watch_id = ? AND first_seen_at < ?", (watch_id, cutoff)
+            ).rowcount
+            removed_by_count = con.execute("""
+                DELETE FROM seen_listings
+                WHERE rowid IN (
+                    SELECT rowid FROM seen_listings
+                    WHERE watch_id = ?
+                    ORDER BY first_seen_at DESC, rowid DESC
+                    LIMIT -1 OFFSET ?
+                )
+            """, (watch_id, max_count)).rowcount
+        return removed_by_age + removed_by_count
+
+    def compact(self) -> None:
+        """Physically reclaim SQLite pages after large manual cleanups."""
+        with self.connection() as con:
+            con.execute("VACUUM")
 
     @staticmethod
     def _watch(row: sqlite3.Row) -> Watch:

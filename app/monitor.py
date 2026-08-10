@@ -21,8 +21,9 @@ def listing_message(watch: Watch, listing: Listing) -> str:
 
 
 class Monitor:
-    def __init__(self, database: Database, bot: Bot, poll_seconds: int = 30) -> None:
+    def __init__(self, database: Database, bot: Bot, poll_seconds: int = 30, max_seen_per_watch: int = 5000, seen_retention_days: int = 90) -> None:
         self.db, self.bot, self.poll_seconds = database, bot, poll_seconds
+        self.max_seen_per_watch, self.seen_retention_days = max_seen_per_watch, seen_retention_days
         self._stop = asyncio.Event()
 
     async def run(self) -> None:
@@ -46,6 +47,9 @@ class Monitor:
             initial = watch.last_checked_at is None
             unseen = self.db.unseen_listing_ids(watch.id, ids)
             self.db.remember_listings(watch.id, ids)
+            removed = self.db.prune_seen_listings(watch.id, self.max_seen_per_watch, self.seen_retention_days)
+            if removed:
+                log.info("Pruned %s old listing IDs for watch %s", removed, watch.id)
             self.db.mark_checked(watch.id)
             if initial:
                 if watch.initial_window_minutes is None:

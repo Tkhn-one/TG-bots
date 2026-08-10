@@ -32,3 +32,14 @@ def test_recent_publication_labels() -> None:
     assert published_within("30 минут назад", 31)
     assert not published_within("30 минут назад", 29)
     assert not published_within(None, 60)
+
+
+def test_seen_listing_retention_keeps_newest_entries(tmp_path) -> None:
+    from app.database import Database
+
+    db = Database(str(tmp_path / "watch.sqlite3"))
+    db.initialize()
+    watch_id = db.create_watch(1, "test", "https://www.avito.ru/moskva?q=test", 5)
+    db.remember_listings(watch_id, [str(number) for number in range(6)])
+    assert db.prune_seen_listings(watch_id, max_count=3, retention_days=365) == 3
+    assert db.unseen_listing_ids(watch_id, ["0", "1", "2", "3", "4", "5"]) == {"0", "1", "2"}
