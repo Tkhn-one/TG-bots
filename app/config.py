@@ -6,7 +6,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     bot_token: str
-    database_path: str = "data/task_planner.sqlite3"
+    task_database_path: str = "data/task_planner.sqlite3"
     log_level: str = "INFO"
     telegram_proxy: str | None = None
     completed_task_retention_days: int = Field(default=30, ge=1, le=365)

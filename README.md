@@ -45,7 +45,7 @@ Copy-Item .env.example .env
 
 ```dotenv
 BOT_TOKEN=123456789:реальный_токен_от_BotFather
-DATABASE_PATH=data/task_planner.sqlite3
+TASK_DATABASE_PATH=data/task_planner.sqlite3
 COMPLETED_TASK_RETENTION_DAYS=30
 ```
 
@@ -59,7 +59,7 @@ python -m app.main
 
 ## Старые данные Avito
 
-Код мониторинга Avito полностью удалён. Старый файл `data/avito_watcher.sqlite3`, если он есть, не читается новым проектом и останется резервной копией. Новый бот создаст отдельную базу `data/task_planner.sqlite3`.
+Код мониторинга Avito полностью удалён. Новый бот использует отдельную переменную `TASK_DATABASE_PATH`, поэтому старая строка `DATABASE_PATH=data/avito_watcher.sqlite3` в существующем `.env` игнорируется. Старый файл `data/avito_watcher.sqlite3`, если он есть, не читается новым проектом и останется резервной копией. Новый бот создаст отдельную базу `data/task_planner.sqlite3`.
 
 Когда убедитесь, что старый файл больше не нужен, его можно удалить вручную:
 
